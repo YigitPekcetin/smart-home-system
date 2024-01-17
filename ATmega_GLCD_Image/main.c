@@ -27,6 +27,12 @@ void GLCD_Data(char Data);
 void printCursor(unsigned char x, unsigned char y, unsigned char on);
 void GLCD_Change(int x);
 void glcd_SetCursor(uint8_t x, uint8_t y);
+
+void adc_init();
+
+uint32_t readTouchX(void);
+uint32_t readTouchY(void);
+
 void clearBuffer();
 void renderBuffer();
 void drawPixel(uint8_t x, uint8_t y);
@@ -40,6 +46,7 @@ uint64_t buffer[64];
 
 int main(void) {
     glcd_Init(); /* Initialize GLCD */
+    adc_init();
     _delay_ms(2);
     GLCD_Change(1);
     clearBuffer();
@@ -60,6 +67,11 @@ int main(void) {
                 fillRound(16 + i * 16, 16 + j * 16, 1);
             }
 
+        uint32_t mouseX = readTouchX();
+        uint32_t mouseY = readTouchY();
+
+        fillRound(mouseX, mouseY, 5);
+
         if (x - 4 <= 0 || x + 4 >= 63) velX *= -1;
         if (y - 4 <= 0 || y + 4 >= 63) velY *= -1;
 
@@ -71,6 +83,7 @@ int main(void) {
         fillRound(x, y, 4);
 
         renderBuffer();
+        _delay_us(50);
     }
 
     return 0;
@@ -177,6 +190,32 @@ uint8_t fullRotate(uint8_t value) {
     return result;
 }
 
+uint32_t readTouchX(void) {
+    ADMUX = (1 << REFS0) | PA0;
+    ADCSRA |= (1 << ADSC);
+    while (ADCSRA & (1 << ADSC))
+        ;
+
+    if (ADC < 50) return 65;
+
+    uint32_t val = (ADC * 142) / 1023;
+
+    return val;
+}
+
+uint32_t readTouchY(void) {
+    ADMUX = (1 << REFS0) | PA1;
+    ADCSRA |= (1 << ADSC);
+    while (ADCSRA & (1 << ADSC))
+        ;
+
+    if (ADC < 50) return 65;
+
+    uint32_t val = (ADC * 142) / 1023;
+
+    return val;
+}
+
 void printCursor(unsigned char x, unsigned char y, unsigned char on) {
     unsigned char page = y / 8;
     unsigned char column = x % 64;
@@ -246,6 +285,12 @@ void glcd_Init() {
     GLCD_Command(0xB8);  /* Set x address (page=0) */
     GLCD_Command(0xC0);  /* Set z address (start line=0) */
     GLCD_Command(0x3F);  // Display ON
+}
+
+void adc_init() {
+    ADMUX = (1 << REFS0);
+    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+    DDRA &= ~(1 << PA0) & ~(1 << PA1);
 }
 
 void glcd_SetCursor(uint8_t x, uint8_t y) {

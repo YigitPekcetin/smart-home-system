@@ -4,8 +4,9 @@
  */
 #define F_CPU 8000000UL
 
-#include <avr/io.h>     /* Include AVR std. library file */
-#include <stdio.h>      /* Include std i/o library file */
+#include <avr/io.h> /* Include AVR std. library file */
+#include <stdio.h>  /* Include std i/o library file */
+#include <stdlib.h>
 #include <util/delay.h> /* Include delay header file */
 
 /* Define CPU clock Freq 8MHz */
@@ -30,6 +31,10 @@ void clearBuffer();
 void renderBuffer();
 void drawPixel(uint8_t x, uint8_t y);
 void fillRound(uint8_t x, uint8_t y, uint8_t radius);
+void drawCircle(uint8_t cx, uint8_t cy, uint8_t radius);
+void drawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2);
+
+uint8_t fullRotate(uint8_t value);
 
 uint64_t buffer[64];
 
@@ -39,13 +44,89 @@ int main(void) {
     GLCD_Change(1);
     clearBuffer();
 
+    int velX = 1;
+    int velY = 2;
+    int x = 6;
+    int y = 30;
+
     while (1) {
         clearBuffer();
-        fillRound(30, 30, 30);
+
+        drawLine(0, 0, 0, 63);
+
+        for (int8_t i = 0; i < 3; i++)
+            for (int8_t j = 0; j < 3; j++) {
+                drawCircle(16 + i * 16, 16 + j * 16, 5);
+                fillRound(16 + i * 16, 16 + j * 16, 1);
+            }
+
+        if (x - 4 <= 0 || x + 4 >= 63) velX *= -1;
+        if (y - 4 <= 0 || y + 4 >= 63) velY *= -1;
+
+        x += velX;
+        y += velY;
+
+        drawLine(0, 32, x, y);
+        fillRound(0, 32, 3);
+        fillRound(x, y, 4);
+
         renderBuffer();
     }
 
     return 0;
+}
+
+void drawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+    int16_t dx = abs(x2 - x1);
+    int16_t dy = abs(y2 - y1);
+
+    int8_t sx = x1 < x2 ? 1 : -1;
+    int8_t sy = y1 < y2 ? 1 : -1;
+    int8_t err = dx - dy;
+
+    while (x1 != x2 || y1 != y2) {
+        drawPixel(x1, y1);
+
+        int16_t e2 = err * 2;
+
+        if (e2 > -dy) {
+            err -= dy;
+            x1 += sx;
+        }
+
+        if (e2 < dx) {
+            err += dx;
+            y1 += sy;
+        }
+    }
+
+    drawPixel(x2, y2);
+}
+
+void drawCircle(uint8_t cx, uint8_t cy, uint8_t radius) {
+    int16_t x = radius;
+    int16_t y = 0;
+    int16_t err = 0;
+
+    while (x >= y) {
+        drawPixel(cx + x, cy + y);
+        drawPixel(cx - x, cy + y);
+        drawPixel(cx + x, cy - y);
+        drawPixel(cx - x, cy - y);
+
+        drawPixel(cx + y, cy + x);
+        drawPixel(cx - y, cy + x);
+        drawPixel(cx + y, cy - x);
+        drawPixel(cx - y, cy - x);
+
+        y++;
+        err += 1 + 2 * y;
+
+        if (2 * (err - x) + 1 > 0) {
+            x--;
+            err += 1 - 2 * x;
+        }
+    }
 }
 
 void fillRound(uint8_t x, uint8_t y, uint8_t radius) {
@@ -58,20 +139,6 @@ void fillRound(uint8_t x, uint8_t y, uint8_t radius) {
 void drawPixel(uint8_t x, uint8_t y) {
     uint64_t temp = buffer[y] | ((uint64_t)(1) << x);
     buffer[y] = temp;
-}
-
-uint8_t fullRotate(uint8_t value) {
-    uint8_t result = 0;
-    uint8_t remainder = value;
-
-    for (uint8_t i = 0; i < 8; i++) {
-        result = result << 1;
-        result |= (remainder >> i) & 1;
-
-        remainder = value;
-    }
-
-    return result;
 }
 
 void renderBuffer() {
@@ -94,6 +161,20 @@ void renderBuffer() {
 void clearBuffer() {
     for (uint8_t i = 0; i < 64; i++)
         buffer[i] = (uint64_t)0;
+}
+
+uint8_t fullRotate(uint8_t value) {
+    uint8_t result = 0;
+    uint8_t remainder = value;
+
+    for (uint8_t i = 0; i < 8; i++) {
+        result = result << 1;
+        result |= (remainder >> i) & 1;
+
+        remainder = value;
+    }
+
+    return result;
 }
 
 void printCursor(unsigned char x, unsigned char y, unsigned char on) {

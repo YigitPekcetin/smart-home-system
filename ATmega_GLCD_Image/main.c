@@ -1,232 +1,116 @@
-#include <avr/io.h>
-#include <util/delay.h>
+/*
+ * ATmega_GLCD_TextFont
+ * http://electronicwings.com
+ */
+#define F_CPU 8000000UL
 
-// GLCD commands
-#define GLCD_CMD_COLUMN_ADDR_SET_LOW   0x00
-#define GLCD_CMD_COLUMN_ADDR_SET_HIGH  0x10
-#define GLCD_CMD_PAGE_ADDR_SET         0xB0
-#define GLCD_CMD_START_LINE_SET        0x40
-#define GLCD_CMD_ADC_NORMAL            0xA0
-#define GLCD_CMD_ADC_REVERSE           0xA1
-#define GLCD_CMD_DISPLAY_NORMAL        0xA6
-#define GLCD_CMD_DISPLAY_REVERSE       0xA7
-#define GLCD_CMD_DISPLAY_OFF           0xAE
-#define GLCD_CMD_DISPLAY_ON            0xAF
-#define TOUCH_X_ADC_CHANNEL 0
-#define TOUCH_Y_ADC_CHANNEL 1
-#define NO_TOUCH_THRESHOLD 50
+#include <avr/io.h>     /* Include AVR std. library file */
+#include <stdio.h>      /* Include std i/o library file */
+#include <util/delay.h> /* Include delay header file */
 
+/* Define CPU clock Freq 8MHz */
+#define Data_Port PORTC
 
-// Function prototypes
-void glcd_command(uint8_t cmd);
-void glcd_data(uint8_t data);
-void glcd_set_position(uint8_t column, uint8_t page);
-void glcd_clear(void);
-void drawPixel(uint8_t, uint8_t);
-void fillRect(uint8_t x, uint8_t y, uint8_t width, uint8_t height);
-void drawRect(uint8_t x, uint8_t y, uint8_t width, uint8_t height);
-void fillRound(uint8_t x, uint8_t y, uint8_t radius);
-uint16_t readTouchX(void);
-uint16_t readTouchY(void);
-void resetIndex(void);
-uint8_t checkIndex(uint8_t x, uint8_t y);
-void openDoors(void);
-void moveNextPoint(void);
+#define RS PA2 /* Define control pins */
+#define RW PA3
+#define EN PD6
+#define CS1 PB0
+#define CS2 PB1
+#define RST PD7
 
-// Global Variables
-uint8_t patternIndex = 0;
-uint8_t pattern[] = {0, 1, 2, 4, 6, 7, 8};
-uint8_t patternSize = 7;
+#define TotalPage 8
 
-typedef struct {
-	uint8_t x;
-    uint8_t y;
-} Coordinate;
+void glcd_Init(void);
+void GLCD_Command(char Command);
+void GLCD_Data(char Data);
+void printPixel(unsigned char x, unsigned char y, unsigned char on);
+void GLCD_Change(int x);
 
-Coordinate patternCoordinates[] = {
-	{16,16}, 
-	{16,32}, 
-	{16,48},
-	{32, 16},
-	{32,32}, 
-	{32, 48},
-	{48,16}, 
-	{48,32}, 
-	{48,48}
-};
+void glcd_SetCursor(uint8_t x, uint8_t y) {
+    GLCD_Command(0xb8 + x);
+    GLCD_Command(0x40 + y);
+}
 
 int main(void) {
-	// Set up SPI as Master
-	DDRB |= (1 << DDB2) | (1 << DDB1) | (1 << DDB0);
-	SPCR |= (1 << MSTR) | (1 << SPR0);
-	SPCR |= (1 << SPE);
+    glcd_Init(); /* Initialize GLCD */
+    _delay_ms(2);
+    GLCD_Change(1);
 
-	// Set up GLCD control pins
-	DDRA |= (1 << PA2) | (1 << PA3); // RS and RW as outputs
-	DDRD |= (1 << PD6) | (1 << PD7); // EN and RST as outputs
-	DDRB |= (1 << PB0) | (1 << PB1); // CS1 and CS2 as outputs
+    while (1) {
+        printPixel(3, 3, 0);
+        printPixel(5, 1, 0);
+    }
 
-	// Initialize GLCD
-	PORTD |= (1 << PD7); // Set RST high (disable reset)
-	_delay_ms(100);
-	PORTD &= ~(1 << PD7); // Set RST low (enable reset)
-	_delay_ms(100);
-	PORTD |= (1 << PD7); // Set RST high (disable reset)
-
-	glcd_command(GLCD_CMD_DISPLAY_OFF);          // Display off
-	glcd_command(GLCD_CMD_ADC_NORMAL);           // ADC normal
-	glcd_command(GLCD_CMD_DISPLAY_NORMAL);       // Display normal
-	glcd_command(GLCD_CMD_DISPLAY_ON);           // Display on
-
-	// Clear the GLCD
-	glcd_clear();
-
-	while (1) {
-		for (int i = 0; i < 3; i++)
-			for (int j = 0; j < 3; j++)
-				drawPixel(16*(i+1), 16*(j+1));
-				
-				
-		uint8_t x = readTouchX();
-		uint8_t y = readTouchY();
-		
-		fillRound(x, y, 5);
-		
-		if (x == 65 || y == 65) {
-			resetIndex();
-			continue;
-		}
-		
-		uint8_t valid = checkIndex(x, y);
-		
-		if (valid) {
-			if (patternIndex == patternSize - 1) openDoors();
-			else moveNextPoint();	
-		}
-			
-			
-			
-		
-		
-	}
+    return 0;
 }
 
-void resetIndex(void) {
-	patternIndex = 0;
+void printPixel(unsigned char x, unsigned char y, unsigned char on) {
+    unsigned char page = y / 8;
+    unsigned char column = x % 64;
+
+    glcd_SetCursor(page, column);
+
+    GLCD_Data(~(1 << 1));  // After going to display section, the shift amount determines where to draw.
 }
 
-uint8_t checkIndex(uint8_t x, uint8_t y) {
-	Coordinate point = patternCoordinates[patternIndex];
-	if (point.x == x && point.y == y)
-		return 1;
-	
-	return 0;
+void GLCD_Command(char Command) /* GLCD command function */
+{
+    Data_Port = Command; /* Copy command on data pin */
+    PORTA &= ~(1 << RS); /* Make RS LOW for command register*/
+    PORTA &= ~(1 << RW); /* Make RW LOW for write operation */
+    PORTD |= (1 << EN);  /* HIGH-LOW transition on Enable */
+    _delay_us(5);
+    PORTD &= ~(1 << EN);
+    _delay_us(5);
 }
 
+void GLCD_Data(char Data) /* GLCD data function */
+{
+    Data_Port = Data;    /* Copy data on data pin */
+    PORTA |= (1 << RS);  /* Make RS HIGH for data register */
+    PORTA &= ~(1 << RW); /* Make RW LOW for write operation */
+    PORTD |= (1 << EN);  /* HIGH-LOW transition on Enable */
+    _delay_us(5);
+    PORTD &= ~(1 << EN);
+    _delay_us(5);
+}
+void GLCD_Change(int screen) {
+    // false = left screen, true = right screen
 
+    PORTA = 0x0C;
+    PORTD = 0x80;
+    if (screen == 1)
+        PORTB = 0x01;
+    else
+        PORTB = 0x02;
 
-void moveNextPoint(void) {
-	patternIndex++;
+    PORTD |= (1 << 7);
+    GLCD_Command(0x3E);  /* Display OFF */
+    GLCD_Command(0x42);  /* Set Y address (column=0) */
+    GLCD_Command(0xB8);  /* Set x address (page=0) */
+    GLCD_Command(0xC0);  /* Set z address (start line=0) */
+    GLCD_Command(0x3F);  // Display ON
 }
 
-void openDoors(void) {
-	// PWM
-}
+void glcd_Init() {
+    // Set the direction of control and data pins
+    DDRA |= (1 << RS) | (1 << RW);
+    DDRD |= (1 << EN) | (1 << RST);
+    DDRB |= (1 << CS1) | (1 << CS2);
+    DDRC = 0xFF;  // Assuming the data port is on PORTC
 
+    _delay_ms(20);
 
-// Send command to GLCD
-void glcd_command(uint8_t cmd) {
-	PORTA &= ~(1 << PA2); // RS low for command
-	PORTA &= ~(1 << PA3); // RW low for write
-	PORTB &= ~(1 << PB0); // CS1 low to select GLCD
-	PORTB &= ~(1 << PB1); // CS2 low to select GLCD
-	SPDR = cmd; // Send command byte
-	while (!(SPSR & (1 << SPIF))); // Wait for transmission to complete
-	PORTB |= (1 << PB0) | (1 << PB1); // Set CS1 and CS2 high to end communication
-}
+    // Initialize control pin states
+    PORTA = 0x00;  // Clear RS and RW
+    PORTD = 0x00;  // Clear EN and RST
+    PORTB = 0x00;  // Clear CS1 and CS2
 
-// Send data to GLCD
-void glcd_data(uint8_t data) {
-	PORTA |= (1 << PA2); // RS high for data
-	PORTA &= ~(1 << PA3); // RW low for write
-	PORTB &= ~(1 << PB0); // CS1 low to select GLCD
-	PORTB &= ~(1 << PB1); // CS2 low to select GLCD
-	SPDR = data; // Send data byte
-	while (!(SPSR & (1 << SPIF))); // Wait for transmission to complete
-	PORTB |= (1 << PB0) | (1 << PB1); // Set CS1 and CS2 high to end communication
-}
-
-// Set GLCD position (column and page)
-void glcd_set_position(uint8_t column, uint8_t page) {
-	glcd_command(GLCD_CMD_COLUMN_ADDR_SET_LOW | (column & 0x0F));
-	glcd_command(GLCD_CMD_COLUMN_ADDR_SET_HIGH | ((column >> 4) & 0x0F));
-	glcd_command(GLCD_CMD_PAGE_ADDR_SET | (page & 0x0F));
-}
-
-// Clear the entire GLCD
-void glcd_clear(void) {
-	for (uint8_t page = 0; page < 8; ++page) {
-		glcd_set_position(0, page);
-		for (uint8_t column = 0; column < 64; ++column) {
-			glcd_data(0x00);
-		}
-	}
-}
-
-// Function to read X-coordinate from the touch panel
-uint16_t readTouchX(void) {
-	ADMUX = (1 << REFS0) | TOUCH_X_ADC_CHANNEL; // Set ADC reference and channel for X-axis
-	ADCSRA |= (1 << ADSC); // Start ADC conversion
-	while (ADCSRA & (1 << ADSC)); // Wait for conversion to complete
-
-	// Check for no touch condition
-	if (ADC < NO_TOUCH_THRESHOLD) {
-		return 65; // Return 0 or another suitable value for no touch
-	}
-
-	return ADC; // Return ADC value
-}
-
-// Function to read Y-coordinate from the touch panel
-uint16_t readTouchY(void) {
-	ADMUX = (1 << REFS0) | TOUCH_Y_ADC_CHANNEL; // Set ADC reference and channel for Y-axis
-	ADCSRA |= (1 << ADSC); // Start ADC conversion
-	while (ADCSRA & (1 << ADSC)); // Wait for conversion to complete
-
-	// Check for no touch condition
-	if (ADC < NO_TOUCH_THRESHOLD) {
-		return 65; // Return 0 or another suitable value for no touch
-	}
-
-	return ADC; // Return ADC value
-}
-
-
-
-void drawPixel(uint8_t x, uint8_t y) {
-	uint8_t page = y / 8; // Calculate the page
-	uint8_t column = x;   // Assume one pixel corresponds to one column
-
-	glcd_set_position(column, page);
-	glcd_data(1 << (y % 8)); // Set the corresponding bit for the pixel in the data byte
-}
-
-void fillRect(uint8_t x, uint8_t y, uint8_t width, uint8_t height) {
-	for (int i = 0; i < width; i++)
-		for (int j = 0; j < height; j++) 
-			drawPixel(x + i, y + j);
-}
-
-void drawRect(uint8_t x, uint8_t y, uint8_t width, uint8_t height) {
-	for (int i = 0; i < width; i++)
-		for (int j = 0; j < height; j++) 
-			if (i == 0 || y == 0 || x == width - 1 || y == height - 1)
-				drawPixel(x + i, y + j);	
-}
-
-void fillRound(uint8_t x, uint8_t y, uint8_t radius) {
-	for (int16_t i = -radius; i <= radius; i++) 
-		for (int16_t j = -radius; j <= radius; j++) 
-			if (i * i + j * j <= radius * radius) 
-				drawPixel(x + i, y + j);
+    // Apply initialization sequence
+    _delay_ms(20);
+    GLCD_Command(0x3E);  /* Display OFF */
+    GLCD_Command(0x42);  /* Set Y address (column=0) */
+    GLCD_Command(0xB8);  /* Set x address (page=0) */
+    GLCD_Command(0xC0);  /* Set z address (start line=0) */
+    GLCD_Command(0x3F);  // Display ON
 }

@@ -23,34 +23,86 @@
 void glcd_Init(void);
 void GLCD_Command(char Command);
 void GLCD_Data(char Data);
-void printPixel(unsigned char x, unsigned char y, unsigned char on);
+void printCursor(unsigned char x, unsigned char y, unsigned char on);
 void GLCD_Change(int x);
+void glcd_SetCursor(uint8_t x, uint8_t y);
+void clearBuffer();
+void renderBuffer();
+void drawPixel(uint8_t x, uint8_t y);
+void fillRound(uint8_t x, uint8_t y, uint8_t radius);
 
-void glcd_SetCursor(uint8_t x, uint8_t y) {
-    GLCD_Command(0xb8 + x);
-    GLCD_Command(0x40 + y);
-}
+uint64_t buffer[64];
 
 int main(void) {
     glcd_Init(); /* Initialize GLCD */
     _delay_ms(2);
     GLCD_Change(1);
+    clearBuffer();
 
     while (1) {
-        printPixel(3, 3, 0);
-        printPixel(5, 1, 0);
+        clearBuffer();
+        fillRound(30, 30, 30);
+        renderBuffer();
     }
 
     return 0;
 }
 
-void printPixel(unsigned char x, unsigned char y, unsigned char on) {
+void fillRound(uint8_t x, uint8_t y, uint8_t radius) {
+    for (int8_t i = -radius; i < radius; i++)
+        for (int8_t j = -radius; j < radius; j++)
+            if (i * i + j * j < radius * radius)
+                drawPixel(x + i, y + j);
+}
+
+void drawPixel(uint8_t x, uint8_t y) {
+    uint64_t temp = buffer[y] | ((uint64_t)(1) << x);
+    buffer[y] = temp;
+}
+
+uint8_t fullRotate(uint8_t value) {
+    uint8_t result = 0;
+    uint8_t remainder = value;
+
+    for (uint8_t i = 0; i < 8; i++) {
+        result = result << 1;
+        result |= (remainder >> i) & 1;
+
+        remainder = value;
+    }
+
+    return result;
+}
+
+void renderBuffer() {
+    for (uint8_t y = 0; y < 64; y += 8)
+        for (uint8_t x = 0; x < 64; x++) {
+            uint8_t cursorBuffer = 0;
+
+            for (uint8_t i = 0; i < 8; i++) {
+                uint64_t bufferString = buffer[y + i];
+                uint8_t val = (bufferString >> x) & (uint64_t)(1);
+
+                cursorBuffer = cursorBuffer << 1;
+                cursorBuffer |= val;
+            }
+
+            printCursor(x, y, fullRotate(cursorBuffer));
+        }
+}
+
+void clearBuffer() {
+    for (uint8_t i = 0; i < 64; i++)
+        buffer[i] = (uint64_t)0;
+}
+
+void printCursor(unsigned char x, unsigned char y, unsigned char on) {
     unsigned char page = y / 8;
     unsigned char column = x % 64;
 
     glcd_SetCursor(page, column);
 
-    GLCD_Data(~(1 << 1));  // After going to display section, the shift amount determines where to draw.
+    GLCD_Data(on);  // After going to display section, the shift amount determines where to draw.
 }
 
 void GLCD_Command(char Command) /* GLCD command function */
@@ -113,4 +165,9 @@ void glcd_Init() {
     GLCD_Command(0xB8);  /* Set x address (page=0) */
     GLCD_Command(0xC0);  /* Set z address (start line=0) */
     GLCD_Command(0x3F);  // Display ON
+}
+
+void glcd_SetCursor(uint8_t x, uint8_t y) {
+    GLCD_Command(0xb8 + x);
+    GLCD_Command(0x40 + y);
 }

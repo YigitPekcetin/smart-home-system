@@ -1,15 +1,16 @@
+/* Define CPU clock Freq 8MHz */
 #define F_CPU 8000000UL
 
-#include <avr/interrupt.h>
-#include <avr/io.h> /* Include AVR std. library file */
-#include <stdio.h>  /* Include std i/o library file */
+#include <avr/interrupt.h> /* Include interrupts for USART*/
+#include <avr/io.h>        /* Include AVR std. library file */
+#include <stdio.h>         /* Include std i/o library file */
 #include <stdlib.h>
 #include <util/delay.h> /* Include delay header file */
 
-/* Define CPU clock Freq 8MHz */
-#define Data_Port PORTC
 // #define USART_BAUDRATE 9600
 #define BAUD_PRESCALE (((F_CPU / (USART_BAUDRATE * 16UL))) - 1)
+
+#define Data_Port PORTC
 
 #define RS PA2 /* Define control pins */
 #define RW PA3
@@ -18,52 +19,13 @@
 #define CS2 PB1
 #define RST PD7
 
-#define TotalPage 8
-
+// Application States
 typedef enum {
     LOCKED,
     UNLOCKED,
     CHANGING_PASSWORD,
     ENTERING_NEW_PASSWORD
 } State;
-
-void glcd_Init(void);
-void GLCD_Command(char Command);
-void GLCD_Data(char Data);
-void printCursor(unsigned char x, unsigned char y, unsigned char on);
-void GLCD_Change(int x);
-void glcd_SetCursor(uint8_t x, uint8_t y);
-
-void adc_init();
-uint32_t readTouchX(void);
-uint32_t readTouchY(void);
-
-void clearBuffer();
-void renderBuffer();
-void drawPixel(uint8_t x, uint8_t y);
-void fillRound(uint8_t x, uint8_t y, uint8_t radius);
-void drawCircle(uint8_t cx, uint8_t cy, uint8_t radius);
-void drawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2);
-
-uint8_t fullRotate(uint8_t value);
-
-void changePassword();
-uint8_t checkPattern();
-uint8_t getCoordinateId(uint32_t, uint32_t);
-void drawEnteredPattern();
-void printPoint(uint16_t x, uint16_t y);
-void resetPattern(void);
-uint8_t checkIndex(uint8_t x, uint8_t y);
-
-uint64_t buffer[64];
-State state = LOCKED;
-
-// Global Variables
-uint8_t patternIndex = 0;
-uint8_t pattern[9] = {0, 3, 6, 7, 8, 9, 9, 9, 9};
-uint8_t enteredPattern[9] = {9, 9, 9, 9, 9, 9, 9, 9, 9};
-uint8_t patternSize = 5;
-uint8_t enteredPatternSize = 0;
 
 typedef struct {
     uint8_t x;
@@ -81,55 +43,77 @@ Coordinate patternCoordinates[] = {
     {32, 48},
     {48, 48}};
 
-void UART_init(long USART_BAUDRATE) {
-    UCSRB |= (1 << RXEN) | (1 << TXEN) | (1 << RXCIE);   /* Turn on transmission and reception */
-    UCSRC |= (1 << URSEL) | (1 << UCSZ0) | (1 << UCSZ1); /* Use 8-bit character sizes */
-    UBRRL = BAUD_PRESCALE;                               /* Load lower 8-bits of the baud rate value */
-    UBRRH = (BAUD_PRESCALE >> 8);                        /* Load upper 8-bits*/
-}
+// Global Variables
+uint64_t buffer[64];  // Frame buffer to render the display. Holds 64 64-bit integers that represents each pixel on the GLCD.
+State state = LOCKED;
 
-void UART_TxChar(char ch) {
-    while (!(UCSRA & (1 << UDRE)))
-        ; /* Wait for empty transmit buffer*/
-    UDR = ch;
-}
+uint8_t patternIndex = 0;
+uint8_t pattern[9] = {0, 3, 6, 7, 8, 9, 9, 9, 9};         // Indices of points on `patternCoordinates` array. 9 means NULL or empty.
+uint8_t patternSize = 5;                                  // Hidden pattern size.
+uint8_t enteredPattern[9] = {9, 9, 9, 9, 9, 9, 9, 9, 9};  // User entered pattern.
+uint8_t enteredPatternSize = 0;                           // User entered pattern size. Incremented on every point match.
 
-void UART_SendString(char *str) {
-    unsigned char j = 0;
+void glcdInit(void);                                                   // Sets up GLCD display to receive data and command.
+void glcdCommand(char Command);                                        // Sends command to GLCD.
+void glcdData(char Data);                                              // Sends data through D0-D7.
+void glcdChange(int x);                                                // Sets the currently rendered side of GLCD.
+void glcdSetCursor(uint8_t x, uint8_t y);                              // Sets cursor to the beginning of the page. Utilized to render frame buffer.
+void printCursor(unsigned char x, unsigned char y, unsigned char on);  // Prints 8-bit data to current cursor location. Used in rendering of the frame buffer.
 
-    while (str[j] != 0) /* Send string till null */
-    {
-        UART_TxChar(str[j]);
-        j++;
-    }
-}
+void adcInit();             // Initialize analog to digital converter. Used to read the analog touch data.
+uint32_t readTouchX(void);  // Returns x coordinate of the touch.
+uint32_t readTouchY(void);  // Returns y coordinate of the touch.
 
+void clearBuffer();                                             // Resets the frame buffer to be all 0s.
+void renderBuffer();                                            // Renders what is in the frame buffer.
+void drawPixel(uint8_t x, uint8_t y);                           // Sets the entered bit of the frame buffer.
+void fillRound(uint8_t x, uint8_t y, uint8_t radius);           // Draws (sets bits) a filled round.
+void drawCircle(uint8_t cx, uint8_t cy, uint8_t radius);        // Draws a border circle.
+void drawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2);  // Draws a line between two points.
+
+uint8_t fullRotate(uint8_t value);  // 180deg rotates the given 8-bit integer (11110010 -> 01001111).
+
+void changePassword();                        // Sets the `pattern` to `enteredPattern`.
+uint8_t checkPattern();                       // Checks if `pattern` matches to `enteredPattern`.
+uint8_t getCoordinateId(uint32_t, uint32_t);  // Given x and y, return the id based on `patternCoordinates` (16,16) -> 0.
+void drawEnteredPattern();                    // Renders the lines of entered pattern.
+void resetPattern(void);                      // Resets `enteredPattern`.
+uint8_t checkIndex(uint8_t x, uint8_t y);     // Checks whether a given point is in the `patternCoordinates`. (48,32) -> true.
+
+void uartInit(long USART_BAUDRATE);       // Initialized USART interface.
+void uartSendChar(char ch);               // Sends a single character through UART.
+void uartSendString(char *str);           // Sends a whole string (char[]) using `uartSendChar`.
+void printPoint(uint16_t x, uint16_t y);  // Prints a point using UART. Mainly for debugging purposes.
+
+/**
+ * Interrupt vector to receive and react to user entered data.
+ */
 ISR(USART_RXC_vect) {
     if (UDR == 'c' || UDR == 'C') {
         state = CHANGING_PASSWORD;
-        UART_SendString("\n\rPlease enter the current password to change password.");
+        uartSendString("\n\rPlease enter the current password to change password.");
     } else if ((UDR == 'q' || UDR == 'Q') && state == UNLOCKED) {
         state = LOCKED;
-        UART_SendString("\n\rExiting home. See you again.");
+        uartSendString("\n\rExiting home. See you again.");
     } else
-        UART_SendString("\n\rPlease enter a valid parameter.");
+        uartSendString("\n\rPlease enter a valid parameter.");
 }
 
 int main(void) {
-    UART_init(9600);
-    adc_init();
-    glcd_Init(); /* Initialize GLCD */
+    uartInit(9600);
+    adcInit();
+    glcdInit();
     sei();
 
     _delay_ms(2);
-    GLCD_Change(1);
+    glcdChange(1);
 
     int velX = 1;
     int velY = 2;
     int x = 6;
     int y = 30;
 
-    UART_SendString("\n\rWelcome to smart home service. You can change password by entering (c): ");
+    uartSendString("\n\rWelcome to smart home service. You can change password by entering (c): ");
 
     while (1) {
         clearBuffer();
@@ -151,8 +135,6 @@ int main(void) {
             drawLine(0, 32, x, y);
             drawLine(63, 32, x, y);
             fillRound(x, y, 4);
-
-            // draw home.
         } else {
             for (int8_t i = 0; i < 3; i++)
                 for (int8_t j = 0; j < 3; j++) {
@@ -165,19 +147,19 @@ int main(void) {
                 if (state == CHANGING_PASSWORD) {
                     if (valid) {
                         state = ENTERING_NEW_PASSWORD;
-                        UART_SendString("\n\rEnter your new password.");
+                        uartSendString("\n\rEnter your new password.");
                         resetPattern();
                     } else {
-                        if (enteredPatternSize > 0) UART_SendString("\n\rPassword is not correct. Try again.");
+                        if (enteredPatternSize > 0) uartSendString("\n\rPassword is not correct. Try again.");
                         resetPattern();
                     }
                 } else if (state == LOCKED) {
                     if (valid) {
                         state = UNLOCKED;
-                        UART_SendString("\n\rWelcome to your home.");
+                        uartSendString("\n\rWelcome to your home.");
                         resetPattern();
                     } else {
-                        if (enteredPatternSize > 0) UART_SendString("\n\rPassword is not correct. Try again.");
+                        if (enteredPatternSize > 0) uartSendString("\n\rPassword is not correct. Try again.");
                         resetPattern();
                     }
                 } else if (state == ENTERING_NEW_PASSWORD) {
@@ -187,7 +169,7 @@ int main(void) {
                         resetPattern();
                     } else if (enteredPatternSize > 0) {
                         resetPattern();
-                        UART_SendString("\n\rThe new password should be consisting of at least 4 different dots. Try a longer pattern.");
+                        uartSendString("\n\rThe new password should be consisting of at least 4 different dots. Try a longer pattern.");
                     } else
                         resetPattern();
                 }
@@ -222,7 +204,7 @@ void changePassword() {
 
     patternSize = enteredPatternSize;
 
-    UART_SendString("\n\rCongratulations! You changed your password. Please enter it to open doors.");
+    uartSendString("\n\rCongratulations! You changed your password. Please enter it to open doors.");
 }
 
 void drawEnteredPattern() {
@@ -276,20 +258,6 @@ uint8_t checkPattern() {
     }
 
     return 1;
-}
-
-void printPoint(uint16_t x, uint16_t y) {
-    char xreading[sizeof(uint16_t) * 8 + 1];
-    char yreading[sizeof(uint16_t) * 8 + 1];
-
-    itoa(x, xreading, 10);
-    itoa(y, yreading, 10);
-
-    UART_SendString("  (");
-    UART_SendString(xreading);
-    UART_SendString(", ");
-    UART_SendString(yreading);
-    UART_SendString(")  ");
 }
 
 void drawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
@@ -393,9 +361,18 @@ uint8_t fullRotate(uint8_t value) {
     return result;
 }
 
+void adcInit() {
+    ADMUX = (1 << REFS0);
+    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+    DDRA &= ~(1 << PA0);
+    DDRA &= ~(1 << PA1);
+}
+
 uint32_t readTouchX(void) {
     ADMUX = (ADMUX & 0xf8) | PA0;
     _delay_us(20);
+    PORTA &= (0 << RW);
+    PORTA |= (1 << RS);
     ADCSRA |= (1 << ADSC);
     while (ADCSRA & (1 << ADSC))
         ;
@@ -411,8 +388,10 @@ uint32_t readTouchX(void) {
 }
 
 uint32_t readTouchY(void) {
-    ADMUX = (ADMUX & 0xf8) | PA5;
+    ADMUX = (ADMUX & 0xf8) | PA1;
     _delay_us(20);
+    PORTA &= (0 << RS);
+    PORTA |= (1 << RW);
     ADCSRA |= (1 << ADSC);
     while (ADCSRA & (1 << ADSC))
         ;
@@ -420,10 +399,9 @@ uint32_t readTouchY(void) {
     uint16_t reading = ADCL;
     reading += ADCH << 8;
 
-    if (reading < 30) return 0;
-    if (reading > 430) return 63;
-
-    uint32_t val = (reading * 142) / 1023;
+    if (reading < 50) return 0;
+    reading = (reading * 63) / (300 - 54);
+    uint32_t val = 63 - reading + 15;
 
     return val;
 }
@@ -432,12 +410,12 @@ void printCursor(unsigned char x, unsigned char y, unsigned char on) {
     unsigned char page = y / 8;
     unsigned char column = x % 64;
 
-    glcd_SetCursor(page, column);
+    glcdSetCursor(page, column);
 
-    GLCD_Data(on);  // After going to display section, the shift amount determines where to draw.
+    glcdData(on);  // After going to display section, the shift amount determines where to draw.
 }
 
-void GLCD_Command(char Command) /* GLCD command function */
+void glcdCommand(char Command) /* GLCD command function */
 {
     Data_Port = Command; /* Copy command on data pin */
     PORTA &= ~(1 << RS); /* Make RS LOW for command register*/
@@ -448,7 +426,7 @@ void GLCD_Command(char Command) /* GLCD command function */
     _delay_us(5);
 }
 
-void GLCD_Data(char Data) /* GLCD data function */
+void glcdData(char Data) /* GLCD data function */
 {
     Data_Port = Data;    /* Copy data on data pin */
     PORTA |= (1 << RS);  /* Make RS HIGH for data register */
@@ -458,7 +436,7 @@ void GLCD_Data(char Data) /* GLCD data function */
     PORTD &= ~(1 << EN);
     _delay_us(5);
 }
-void GLCD_Change(int screen) {
+void glcdChange(int screen) {
     // false = left screen, true = right screen
     PORTA = 0xc;
     PORTD = 0x80;
@@ -467,14 +445,14 @@ void GLCD_Change(int screen) {
     else
         PORTB = 0x02;
 
-    GLCD_Command(0x3E);  /* Display OFF */
-    GLCD_Command(0x42);  /* Set Y address (column=0) */
-    GLCD_Command(0xB8);  /* Set x address (page=0) */
-    GLCD_Command(0xC0);  /* Set z address (start line=0) */
-    GLCD_Command(0x3F);  // Display ON
+    glcdCommand(0x3E);  /* Display OFF */
+    glcdCommand(0x42);  /* Set Y address (column=0) */
+    glcdCommand(0xB8);  /* Set x address (page=0) */
+    glcdCommand(0xC0);  /* Set z address (start line=0) */
+    glcdCommand(0x3F);  // Display ON
 }
 
-void glcd_Init() {
+void glcdInit() {
     // Set the direction of control and data pins
     DDRA = (1 << RS) | (1 << RW);
     DDRD |= (1 << EN) | (1 << RST);
@@ -489,21 +467,50 @@ void glcd_Init() {
 
     // Apply initialization sequence
     _delay_ms(20);
-    GLCD_Command(0x3E);  /* Display OFF */
-    GLCD_Command(0x42);  /* Set Y address (column=0) */
-    GLCD_Command(0xB8);  /* Set x address (page=0) */
-    GLCD_Command(0xC0);  /* Set z address (start line=0) */
-    GLCD_Command(0x3F);  // Display ON
+    glcdCommand(0x3E);  /* Display OFF */
+    glcdCommand(0x42);  /* Set Y address (column=0) */
+    glcdCommand(0xB8);  /* Set x address (page=0) */
+    glcdCommand(0xC0);  /* Set z address (start line=0) */
+    glcdCommand(0x3F);  // Display ON
 }
 
-void adc_init() {
-    ADMUX = (1 << REFS0);
-    ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
-    DDRA &= ~(1 << PA0);
-    DDRA &= ~(1 << PA1);
+void glcdSetCursor(uint8_t x, uint8_t y) {
+    glcdCommand(0xb8 + x);
+    glcdCommand(0x40 + y);
 }
 
-void glcd_SetCursor(uint8_t x, uint8_t y) {
-    GLCD_Command(0xb8 + x);
-    GLCD_Command(0x40 + y);
+void uartInit(long USART_BAUDRATE) {
+    UCSRB |= (1 << RXEN) | (1 << TXEN) | (1 << RXCIE);   /* Turn on transmission and reception */
+    UCSRC |= (1 << URSEL) | (1 << UCSZ0) | (1 << UCSZ1); /* Use 8-bit character sizes */
+    UBRRL = BAUD_PRESCALE;                               /* Load lower 8-bits of the baud rate value */
+    UBRRH = (BAUD_PRESCALE >> 8);                        /* Load upper 8-bits*/
+}
+
+void uartSendChar(char ch) {
+    while (!(UCSRA & (1 << UDRE)))
+        ; /* Wait for empty transmit buffer*/
+    UDR = ch;
+}
+
+void uartSendString(char *str) {
+    unsigned char j = 0;
+
+    while (str[j] != 0) {
+        uartSendChar(str[j]);
+        j++;
+    }
+}
+
+void printPoint(uint16_t x, uint16_t y) {
+    char xreading[sizeof(uint16_t) * 8 + 1];
+    char yreading[sizeof(uint16_t) * 8 + 1];
+
+    itoa(x, xreading, 10);
+    itoa(y, yreading, 10);
+
+    uartSendString("  (");
+    uartSendString(xreading);
+    uartSendString(", ");
+    uartSendString(yreading);
+    uartSendString(")  ");
 }
